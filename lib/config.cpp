@@ -4,8 +4,6 @@
 #include <sstream>
 #include <cctype>
 
-using namespace std;
-
 // **************************************************************************
 // helper funcs are only visible within this translation unit; the funcs 
 // handle basic string cleaning, file reading, and config parsing.
@@ -173,15 +171,15 @@ namespace {
 
 //   the folloing exposes internals for testing (if enabled)
 #ifdef ENABLE_TESTS
-std::string testable_trim(const std::string &s) { return trim(s); }
+string testable_trim(const string &s) { return trim(s); }
 
-std::string testable_strip_comments(const std::string &line)
+string testable_strip_comments(const string &line)
 { return strip_comments(line); }
 
-bool testable_is_valid_line(const std::string &line)
+bool testable_is_valid_line(const string &line)
 { return is_valid_line(line); }
 
-std::string testable_get_filename_no_ext(const std::string &path)
+string testable_get_filename_no_ext(const string &path)
 { return get_filename_no_ext(path); }
 
 bool testable_open_file(const string &path, ifstream &in)
@@ -269,3 +267,46 @@ bool parse_config(const string &path, Config &cfg) {
     // Step 7: all successful
     return true;
 } // parse_config()
+
+/**
+ * @brief prints the parsed contents stored in 'Config'
+ *
+ * @param cfg config struct for printing
+ */
+void print_config(const Config &cfg) {
+    cout << "[!] Config parsed successfully!\n";
+    cout << "[*] Config file: " << cfg.config_name << "\n\n";
+
+    // print global variables
+    cout << "=== Global Parameters ===\n";
+    cout << "Number of nodes (n):       " << cfg.n << "\n";
+    cout << "minPerActive:              " << cfg.minPerActive << "\n";
+    cout << "maxPerActive:              " << cfg.maxPerActive << "\n";
+    cout << "minSendDelay (ms):         " << cfg.minSendDelay_ms << "\n";
+    cout << "snapshotDelay (ms):        " << cfg.snapshotDelay_ms << "\n";
+    cout << "maxNumber:                 " << cfg.maxNumber << "\n\n";
+
+    // print node information
+    cout << "=== Nodes ===\n";
+    for (const auto &node : cfg.nodes) {
+        cout << "Node ID: " << node.id
+                  << " | Host: " << node.host
+                  << " | Port: " << node.port << "\n";
+    }
+
+    // print neighbors
+    cout << "\n=== Neighbors ===\n";
+    for (size_t i = 0; i < cfg.neighbors.size(); ++i) {
+        cout << "Node " << i << " neighbors: ";
+        if (cfg.neighbors[i].empty()) {
+            cout << "(none)";
+        } else {
+            for (size_t j = 0; j < cfg.neighbors[i].size(); ++j) {
+                cout << cfg.neighbors[i][j];
+                if (j + 1 < cfg.neighbors[i].size())
+                    cout << ", ";
+            }
+        }
+        cout << "\n";
+    }
+} // print_config()

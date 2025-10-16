@@ -3,7 +3,6 @@
 
 #include "node.hpp"
 #include <vector>
-#include <string>
 
 using namespace std;
 
@@ -18,7 +17,8 @@ struct Config {
     string config_name;
 };
 
-bool parse_config(const std::string &path, Config &cfg);
+bool parse_config(const string &path, Config &cfg);
+void print_config(const Config &cfg);
 
 #ifdef ENABLE_TESTS
 string              testable_trim               (const string &s);
