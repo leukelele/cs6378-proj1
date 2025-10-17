@@ -1,3 +1,11 @@
+/****************************************************************************
+ * file: config.hpp
+ * author: luke le
+ * description:
+ *     declares data structures and functions for reading and storing
+ *     configuration parameters
+ ****************************************************************************/
+
 #ifndef CONFIG_HPP
 #define CONFIG_HPP
 
@@ -7,10 +15,11 @@
 using namespace std;
 
 struct Config {
-    int n;
+    int n;                          // number of nodes
     int minPerActive, maxPerActive;
     int minSendDelay_ms;
-    int snapshotDelay_ms;
+    int snapshotDelay_ms;           // amount of time to wait between 
+                                    // initiating snapshots
     int maxNumber;
     vector<NodeInfo> nodes;
     vector<vector<int>> neighbors;
