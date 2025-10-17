@@ -1,3 +1,15 @@
+/****************************************************************************
+ * file: config.cpp
+ * author: luke le
+ * description:
+ *     implements functions for parsing and printing configuration data
+ * notes:
+ *     this unit was implemented with free functions and an anonymous
+ *     namespace. The use of an anonymous namespace makes helper functions
+ *     private to the translation unit without the extra boiler plate and 
+ *     is especially efficient for this simple use case.
+ ****************************************************************************/
+
 #include "config.hpp"
 #include <iostream>
 #include <fstream>
@@ -12,6 +24,7 @@ namespace {
 
     /**
      * @brief trim leading and trailing whitespace from a string
+     *
      * @param s input string.
      * @return a copy of the string with whitespace removed from both ends
      */
@@ -28,6 +41,7 @@ namespace {
 
     /**
      * @brief remove everything after the first '#' character (for comments)
+     *
      * @param line input string.
      * @return the line trimmed without trailing comments
      */
@@ -40,6 +54,7 @@ namespace {
 
     /**
      * @brief determine if a line is considered a valid config line; a valid
+     *
      * line starts with a digit
      * @param line Input string.
      * @return True if valid, false otherwise.
@@ -50,6 +65,7 @@ namespace {
 
     /**
      * @brief extract the filename without its extension from a path
+     * 
      * @param path file path
      * @return filename without extension
      */
@@ -61,6 +77,7 @@ namespace {
 
     /**
      * @brief attempt to open a file for reading
+     *
      * @param path path to file
      * @param in input file stream
      * @return true if file was opened successfully, false otherwise.
@@ -76,6 +93,7 @@ namespace {
 
     /**
      * @brief read all lines from a file stream, clean them, and filter valid
+     *
      * config lines
      * @param in open file stream.
      * @return vector of valid, trimmed lines.
@@ -96,6 +114,7 @@ namespace {
     /**
      * @brief top-level helper, reads valid lines from a file and extract
      * config name
+     *
      * @param path path to config file
      * @param validLines output vector with valid lines
      * @param configName output config name
@@ -113,6 +132,7 @@ namespace {
 
     /**
      * @brief parse the first line of the config file
+     *
      * @param line the first config line
      * @param cfg config structure to fill
      * @return true if parsing succeeded, false otherwise
@@ -130,6 +150,7 @@ namespace {
 
     /**
      * @brief parse the node definition lines and populate 'cfg.nodes'
+     *
      * @param lines vector of node definition lines.
      * @param cfg config structure to fill.
      * @return true if all node lines parsed successfully, false otherwise.
@@ -150,6 +171,7 @@ namespace {
 
     /**
      * @brief parse neighbor definitions for each node
+     *
      * @param lines Vector of neighbor lines
      * @param cfg Config structure to fill
      * @return always true (invalid neighbors are skipped silently)
@@ -169,8 +191,9 @@ namespace {
 
 } // end anonymous namespace
 
-//   the folloing exposes internals for testing (if enabled)
+//   the following exposes internals for testing (if enabled)
 #ifdef ENABLE_TESTS
+
 string testable_trim(const string &s) { return trim(s); }
 
 string testable_strip_comments(const string &line)
@@ -200,6 +223,7 @@ bool testable_parse_nodes(const vector<string> &lines, Config &cfg)
 
 bool testable_parse_neighbors(const vector<string> &lines, Config &cfg)
 { return parse_neighbors(lines, cfg); }
+
 #endif // ENABLE_TESTS
 
 /**
@@ -276,6 +300,7 @@ bool parse_config(const string &path, Config &cfg) {
 void print_config(const Config &cfg) {
     cout << "[!] Config parsed successfully!\n";
     cout << "[*] Config file: " << cfg.config_name << "\n\n";
+    cout << "[*] Parsed content is as follows:" << "\n";
 
     // print global variables
     cout << "=== Global Parameters ===\n";
