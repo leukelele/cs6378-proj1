@@ -3,7 +3,6 @@
 #include <string>
 
 int main() {
-
     Config cfg;
     const std::string path = CONFIG_FILE_PATH;
 
