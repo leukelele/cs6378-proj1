@@ -259,16 +259,16 @@ bool testable_parse_neighbors(const vector<string> &lines, Config &cfg)
 bool parse_config(const string &path, Config &cfg) {
     vector<string> validLines;
 
-    // Step 1: read valid, trimmed lines from file
+    // 1: read valid, trimmed lines from file
     if (!read_valid_lines(path, validLines, cfg.config_name)) {
         cerr << "No valid lines found in config\n";
         return false;
     }
 
-    // Step 2: parse global settings
+    // 2: parse global settings
     if (!parse_globals(validLines[0], cfg)) return false;
 
-    // Step 3: check number of valid lines
+    // 3: check number of valid lines
     size_t expected = static_cast<size_t>(2 * cfg.n + 1);
     if (validLines.size() < expected) {
         cerr << "Config has fewer than expected valid lines. expected >= "
@@ -276,19 +276,19 @@ bool parse_config(const string &path, Config &cfg) {
         return false;
     }
 
-    // Step 4: slice lines into nodes and neighbors
+    // 4: slice lines into nodes and neighbors
     auto nodeBegin = validLines.begin() + 1;
     auto nodeEnd = nodeBegin + cfg.n;
     auto neighborBegin = nodeEnd;
     auto neighborEnd = neighborBegin + cfg.n;
 
-    // Step 5: parse node definitions
+    // 5: parse node definitions
     if (!parse_nodes({nodeBegin, nodeEnd}, cfg)) return false;
 
-    // Step 6: parse neighbor definitions
+    // 6: parse neighbor definitions
     if (!parse_neighbors({neighborBegin, neighborEnd}, cfg)) return false;
 
-    // Step 7: all successful
+    // 7: all successful
     return true;
 } // parse_config()
 
