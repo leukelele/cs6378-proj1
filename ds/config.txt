@@ -1,11 +1,11 @@
 7 2 4 100 2000 10
-0 dx01 4000
-1 dx02 4001
-2 dx03 4002
-3 dx04 4003
-4 dx05 4004
-5 dx06 4000
-6 dx07 4000
+0 dx01.utdallas.edu 4000
+1 dx02.utdallas.edu 4001
+2 dx03.utdallas.edu 4002
+3 dx04.utdallas.edu 4003
+4 dx05.utdallas.edu 4004
+5 dx06.utdallas.edu 4000
+6 dx07.utdallas.edu 4000
 1 4
 0 2 3 4 5 6
 1 3
