@@ -16,6 +16,8 @@
 #include <sstream>
 #include <cctype>
 
+using namespace std;
+
 // **************************************************************************
 // helper funcs are only visible within this translation unit; the funcs 
 // handle basic string cleaning, file reading, and config parsing.
@@ -164,7 +166,7 @@ namespace {
                 cerr << "Invalid node line: " << lines[i] << "\n";
                 return false;
             }
-            cfg.nodes[id] = {id, port, host};
+            cfg.nodes[id] = {id, host, port};
         }
         return true;
     } // parse_nodes
@@ -299,7 +301,7 @@ bool parse_config(const string &path, Config &cfg) {
  */
 void print_config(const Config &cfg) {
     cout << "[!] Config parsed successfully!\n";
-    cout << "[*] Config file: " << cfg.config_name << "\n\n";
+    cout << "[*] Config file: " << cfg.config_name << "\n";
     cout << "[*] Parsed content is as follows:" << "\n";
 
     // print global variables
