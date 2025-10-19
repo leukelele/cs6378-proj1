@@ -47,9 +47,9 @@ int main() {
         "2 example.com 5002"
     };
     vector<NodeInfo> expectedNodes = {
-        {0, 5000, "localhost"},
-        {1, 5001, "127.0.0.1"},
-        {2, 5002, "example.com"}
+        {0, "localhost", 5000},
+        {1, "127.0.0.1", 5001},
+        {2, "example.com", 5002}
     };
     run_parse_nodes_test(validLines, 3, true, expectedNodes);
 
