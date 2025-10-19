@@ -26,10 +26,14 @@ configure_file(
     COPYONLY
 )
 
+# add executable before linking libraries
 add_executable(proj1
     ds/main.cpp
     ${LIB_SOURCES}
 )
+
+# link SCTP library after defining the executable
+target_link_libraries(proj1 PRIVATE sctp)
 
 # tests (conditionally included)
 if(BUILD_TESTS)
