@@ -5,8 +5,8 @@
 
 struct NodeInfo {
     int id;
-    int port;
     std::string host;
+    int port;
 };
 
 #endif
