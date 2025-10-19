@@ -1,16 +1,34 @@
+/****************************************************************************
+ * file: sctp_wrapper.hpp
+ * author: luke le
+ * description:
+ *     declares class functions for socket management
+ ****************************************************************************/
 #ifndef SCTP_WRAPPER_HPP
 #define SCTP_WRAPPER_HPP
 
-#include <string>
-#include <sys/socket.h> // for socklen_t
 #include <netinet/in.h>
+#include <string>
 
-int     create_listen_socket (int port, int backlog = 5);
-int     connect_to_peer      (const std::string &host, int port);
-int     accept_connection    (int listen_fd, sockaddr_storage &peer_addr,
-                                socklen_t &peer_len);
-ssize_t send_all             (int fd, const void *buf, size_t len);
-ssize_t recv_all             (int fd, void *buf, size_t len);
-void    close_socket         (int fd);
+class SCTPSocket {
+public:
+    SCTPSocket();
+    ~SCTPSocket();
+
+    bool create();
+    bool bind(int port);
+    bool listen(int backlog = 5);
+    bool accept(SCTPSocket &clientSocket);
+    bool connect(const std::string &host, int port);
+    bool send(const std::string &message);
+    bool receive(std::string &message);
+    sockaddr_in get_peer_addr() const;
+
+    void close();
+
+private:
+    int sockfd;
+    sockaddr_in addr;
+};
 
 #endif // SCTP_WRAPPER_HPP
