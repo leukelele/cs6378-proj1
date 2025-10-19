@@ -5,15 +5,11 @@
  *     declares data structures and functions for reading and storing
  *     configuration parameters
  ****************************************************************************/
-
 #ifndef CONFIG_HPP
 #define CONFIG_HPP
 
 #include "node.hpp"
-
 #include <vector>
-
-using namespace std;
 
 struct Config {
     int n;                          // number of nodes
@@ -22,30 +18,31 @@ struct Config {
     int snapshotDelay_ms;           // amount of time to wait between 
                                     // initiating snapshots
     int maxNumber;
-    vector<NodeInfo> nodes;
-    vector<vector<int>> neighbors;
-    string config_name;
+    std::vector<NodeInfo> nodes;
+    std::vector<std::vector<int>> neighbors;
+    std::string config_name;
 };
 
-bool parse_config(const string &path, Config &cfg);
+bool parse_config(const std::string &path, Config &cfg);
 void print_config(const Config &cfg);
 
 #ifdef ENABLE_TESTS
-string              testable_trim                (const string &s);
-string              testable_strip_comments      (const string &line);
-bool                testable_is_valid_line       (const string &line);
-string              testable_get_filename_no_ext (const string &path);
-bool                testable_open_file           (const string &path, 
-                                                    ifstream &in);
-vector<string>      testable_clean_valid_lines   (istream &in);
-bool                testable_read_valid_lines    (const string &path,
-                                                    vector<string> &validLines,
-                                                    string &configName);
-bool                testable_parse_globals       (const string &line,
-                                                    Config &cfg);
-bool                testable_parse_nodes         (const vector<string> &lines,
-                                                    Config &cfg);
-bool                testable_parse_neighbors     (const vector<string> &lines,
-                                                    Config &cfg);
+std::string testable_trim                (const std::string &s);
+std::string testable_strip_comments      (const std::string &line);
+bool        testable_is_valid_line       (const std::string &line);
+std::string testable_get_filename_no_ext (const std::string &path);
+bool        testable_open_file           (const std::string &path, 
+                                                std::ifstream &in);
+std::vector<std::string>testable_clean_valid_lines  (std::istream &in);
+bool        testable_read_valid_lines    (const std::string &path,
+                                                std::vector<std::string> &vL,
+                                                std::string &configName);
+bool        testable_parse_globals      (const std::string &line, Config &cfg);
+
+bool        testable_parse_nodes         (const std::vector<std::string> &l, 
+                                                Config &cfg);
+bool        testable_parse_neighbors    (const std::vector<std::string> &l,
+                                               Config &cfg);
 #endif // ENABLE_TESTS
+
 #endif // CONFIG_HPP
