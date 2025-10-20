@@ -1,3 +1,4 @@
+// ds/main.cpp
 #include "config.hpp"
 #include "map_protocol.hpp"
 
@@ -13,10 +14,14 @@ int main(int argc, char *argv[]) {
     int node_id = std::stoi(argv[1]);
 
     Config cfg;
-    const std::string path = CONFIG_FILE_PATH;
+    std::string path = CONFIG_FILE_PATH;
     if (!parse_config(path, cfg)) {
-        std::cerr << "Failed to parse config file: " << path << "\n";
-        return 1;
+        // Fallback to a relative path so remote nodes can find the file
+        path = "ds/config.txt";
+        if (!parse_config(path, cfg)) {
+            std::cerr << "Failed to parse config file: " << path << "\n";
+            return 1;
+        }
     }
     print_config(cfg);
 
@@ -25,13 +30,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    MapProtocol node(node_id, cfg);
-    if (!node.initialize()) {
-        std::cerr << "[!] Node " << node_id << " failed to initialize.\n";
-        return 1;
-    }
-
-    node.start();
-
+    MapProtocol node(cfg, node_id);
+    node.run();
     return 0;
 }
