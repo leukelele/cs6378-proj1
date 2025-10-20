@@ -35,7 +35,7 @@ add_executable(proj1
 find_package(Threads REQUIRED)
 
 # link SCTP library after defining the executable
-target_link_libraries(proj1 PRIVATE sctp)
+target_link_libraries(proj1 PRIVATE sctp Threads::Threads)
 
 # tests (conditionally included)
 if(BUILD_TESTS)
