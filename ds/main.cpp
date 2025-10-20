@@ -11,18 +11,25 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    int node_id = std::stoi(argv[1]);
+    int node_id = -1;
+    try {
+        node_id = std::stoi(argv[1]);
+    } catch (...) {
+        std::cerr << "Invalid node_id: " << argv[1] << "\n";
+        return 1;
+    }
 
     Config cfg;
-    std::string path = CONFIG_FILE_PATH;
+    std::string path = CONFIG_FILE_PATH;      // set by CMake
     if (!parse_config(path, cfg)) {
-        // Fallback to a relative path so remote nodes can find the file
+        // Fallback so remote nodes can find the file when run outside build dir
         path = "ds/config.txt";
         if (!parse_config(path, cfg)) {
             std::cerr << "Failed to parse config file: " << path << "\n";
             return 1;
         }
     }
+
     print_config(cfg);
 
     if (node_id < 0 || node_id >= cfg.n) {
