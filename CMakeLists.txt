@@ -32,6 +32,8 @@ add_executable(proj1
     ${LIB_SOURCES}
 )
 
+find_package(Threads REQUIRED)
+
 # link SCTP library after defining the executable
 target_link_libraries(proj1 PRIVATE sctp)
 
