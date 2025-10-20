@@ -51,14 +51,17 @@ SCTPSocket::~SCTPSocket() {
  *
  * @return true if socket creation succeeded, false otherwise
  */
+// lib/sctp_wrapper.cpp
 bool SCTPSocket::create() {
     sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_SCTP);
     if (sockfd < 0) {
         std::cerr << "[!] Failed to create SCTP socket\n";
         return false;
     }
+    int yes = 1;
+    ::setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
     return true;
-} // create()
+}
 
 /**
  * @brief bind the SCTP socket to a local port configures the sockaddr_in
