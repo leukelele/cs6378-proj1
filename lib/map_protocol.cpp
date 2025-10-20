@@ -3,224 +3,250 @@
 
 #include <iostream>
 #include <chrono>
-#include <cstring>
-#include <unistd.h>
+#include <thread>
+#include <algorithm>
+#include <string>
+#include <condition_variable>
+#include <thread>
 
-using namespace std::chrono;
+using namespace std;
 
+// -------------------- static helpers (no lambdas) --------------------
+std::string MapProtocol::make_hello(int id) {
+    return std::string("HELLO|") + std::to_string(id);
+}
+
+bool MapProtocol::parse_hello(const std::string& s, int& out_id) {
+    const std::string pfx = "HELLO|";
+    if (s.size() < pfx.size()) return false;
+    if (s.compare(0, pfx.size(), pfx) != 0) return false;
+    try {
+        out_id = std::stoi(s.substr(pfx.size()));
+    } catch (...) {
+        return false;
+    }
+    return true;
+}
+
+// -------------------- ctor --------------------
 MapProtocol::MapProtocol(const Config& cfg, int node_id)
     : cfg_(cfg),
       id_(node_id),
       vc_(cfg.n, 0),
-      is_active_(node_id == 0),      // Node 0 starts active (simple choice)
-      sent_total_(0),
       stop_(false),
-      rng_(static_cast<unsigned>(steady_clock::now().time_since_epoch().count()) ^ (node_id * 0x9e3779b1u)),
-      snapshot_mgr_(node_id, cfg.config_name, cfg.n) {}
-
-void MapProtocol::establish_connections() {
-    // Create listening socket
-    listen_sock_.create();
-    listen_sock_.bind(cfg_.nodes[id_].port);
-    listen_sock_.listen(5);
-
-    // Connect to neighbors with higher id; accept from lower id
-    // First: async connects (retry until success)
-    for (int nb : cfg_.neighbors[id_]) {
-        if (nb > id_) {
-            SCTPSocket s;
-            s.create();
-            const auto& info = cfg_.nodes[nb];
-            // retry loop until connect succeeds
-            while (!stop_.load()) {
-                if (s.connect(info.host, info.port)) break;
-                std::this_thread::sleep_for(std::chrono::milliseconds(200));
-            }
-            links_[nb] = std::move(s);
-            std::cerr << "[+] " << id_ << " connected to " << nb << " (" << info.host
-                      << ":" << info.port << ")\n";
-        }
-    }
-
-    // Accept from neighbors with lower id
-    int accepts_needed = 0;
-    for (int nb : cfg_.neighbors[id_]) if (nb < id_) ++accepts_needed;
-
-    while (accepts_needed > 0 && !stop_.load()) {
-        SCTPSocket peer;
-        if (listen_sock_.accept(peer)) {
-            // Determine which neighbor this is (by peer port host match)
-            sockaddr_in sin = peer.get_peer_addr();
-            // Map by scanning neighbors with lower id
-            bool mapped = false;
-            for (int nb : cfg_.neighbors[id_]) {
-                if (nb < id_) {
-                    const auto& info = cfg_.nodes[nb];
-                    // We can't rely on port alone (NAT not in dcXX); match by port.
-                    if (info.port == ntohs(sin.sin_port)) {
-                        links_[nb] = std::move(peer);
-                        std::cerr << "[+] " << id_ << " accepted from " << nb
-                                  << " (:" << info.port << ")\n";
-                        --accepts_needed;
-                        mapped = true;
-                        break;
-                    }
-                }
-            }
-            if (!mapped) {
-                // Fallback: store anyway (best effort)
-                // Find first unmapped lower-id neighbor
-                for (int nb : cfg_.neighbors[id_]) {
-                    if (nb < id_ && links_.find(nb) == links_.end()) {
-                        links_[nb] = std::move(peer);
-                        --accepts_needed;
-                        break;
-                    }
-                }
-            }
-        } else {
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
-    }
-
-    // All connections established; we can close the listening socket if desired.
-    listen_sock_.close();
+      rng_(static_cast<unsigned>(
+               std::chrono::steady_clock::now().time_since_epoch().count()) ^
+           static_cast<unsigned>(node_id * 0x9e3779b1u)),
+      snapshot_mgr_(node_id, cfg.config_name, cfg.n)
+{
+    // Force line-buffered behavior so each '\n' flushes (useful under nohup)
+    std::cout.setf(std::ios::unitbuf);
+    std::cerr.setf(std::ios::unitbuf);
 }
 
-void MapProtocol::receiver_loop(int neighbor_id) {
-    auto& sock = links_[neighbor_id];
-    for (;;) {
-        if (stop_.load()) return;
-        std::string msg;
-        if (!sock.receive(msg)) {
-            // Backoff and retry on transient failure
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+// -------------------- small utility --------------------
+bool MapProtocol::is_neighbor(int peer_id) const {
+    const std::vector<int>& nbs = cfg_.neighbors[id_];
+    return std::find(nbs.begin(), nbs.end(), peer_id) != nbs.end();
+}
+
+// -------------------- acceptor thread function --------------------
+void MapProtocol::acceptor_loop(std::atomic<bool>* accepting,
+                                int expected_links)
+{
+    using namespace std::chrono;
+    while (!stop_.load() && accepting->load()) {
+        SCTPSocket peer;
+        if (!listen_sock_.accept(peer)) {
+            std::this_thread::sleep_for(milliseconds(10));
             continue;
         }
-        int sender = -1;
-        std::vector<int> mvc;
-        std::string payload;
-        if (decode_app_message(msg, sender, mvc, payload)) {
-            on_receive_app(sender, mvc, payload);
-        } else {
-            // Unknown or malformed control; ignore for now
-        }
-    }
-}
 
-void MapProtocol::driver_loop() {
-    std::uniform_int_distribution<int> per_active(cfg_.minPerActive, cfg_.maxPerActive);
-
-    while (!stop_.load()) {
-        // Wait until activated or stopping
-        {
-            std::unique_lock<std::mutex> lk(m_);
-            cv_.wait(lk, [this]{
-                return stop_.load() || is_active_.load();
-            });
-            if (stop_.load()) break;
+        // Expect peer HELLO first
+        std::string hello;
+        if (!peer.receive(hello)) {
+            peer.close();
+            continue;
         }
 
-        // Compute how many messages to send in this active burst
-        int to_send = per_active(rng_);
-        for (int i = 0; i < to_send; ++i) {
-            int nb = pick_random_neighbor();
-            if (nb < 0) break; // no neighbors
-            // Vector clock: before send
-            {
-                std::lock_guard<std::mutex> lk(m_);
-                if (sent_total_ >= cfg_.maxNumber) {
-                    is_active_.store(false);
-                    break;
-                }
-                vc_[id_] += 1;
-                std::string payload = pick_random_payload();
-                std::string wire = encode_app_message(id_, vc_, payload);
-                links_[nb].send(wire);
-                ++sent_total_;
-            }
-
-            // Respect minSendDelay between sequential sends in a burst
-            if (i + 1 < to_send) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(cfg_.minSendDelay_ms));
-            }
+        int peer_id = -1;
+        if (!parse_hello(hello, peer_id) || !is_neighbor(peer_id)) {
+            // malformed or not an expected neighbor
+            peer.close();
+            continue;
         }
 
-        // End of burst -> go passive
-        is_active_.store(false);
+        // Reply with our HELLO
+        (void)peer.send(make_hello(id_));
 
-        // If we've exhausted our budget, we simply remain passive forever
-        // (Part 4 will introduce proper global termination/halt).
-    }
-}
-
-void MapProtocol::snapshot_timer_loop() {
-    // TEMPORARY: local VC snapshot every snapshotDelay_ms
-    // This only serves to produce the required output files now.
-    while (!stop_.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(cfg_.snapshotDelay_ms));
-        if (stop_.load()) break;
-        std::vector<int> snap;
+        // Store link if not present
         {
             std::lock_guard<std::mutex> lk(m_);
-            snap = vc_;
-        }
-        snapshot_mgr_.record_snapshot(snap);
-    }
-}
-
-void MapProtocol::on_receive_app(int from, const std::vector<int>& msg_vc,
-                                 const std::string& /*payload*/)
-{
-    // Vector clock merge: vc[k] = max(vc[k], msg_vc[k]); then vc[i]++
-    {
-        std::lock_guard<std::mutex> lk(m_);
-        if (msg_vc.size() == vc_.size()) {
-            for (size_t k = 0; k < vc_.size(); ++k) {
-                vc_[k] = std::max(vc_[k], msg_vc[k]);
+            if (links_.find(peer_id) == links_.end()) {
+                links_[peer_id] = std::move(peer);
+                std::cout << "[+] " << id_ << " accepted from " << peer_id << "\n";
+            } else {
+                // duplicate (race with outbound) → close
+                peer.close();
             }
         }
-        vc_[id_] += 1;
 
-        // Activation rule for MAP:
-        if (!is_active_.load() && sent_total_ < cfg_.maxNumber) {
-            is_active_.store(true);
-            cv_.notify_one();
+        // Early out if we already have all links
+        if (static_cast<int>(links_.size()) >= expected_links) break;
+    }
+}
+
+// -------------------- connection setup (no lambdas) --------------------
+void MapProtocol::establish_connections() {
+    using namespace std::chrono;
+
+    const int expected_links = static_cast<int>(cfg_.neighbors[id_].size());
+
+    // 1) Bind + listen (retries to handle races/TIME_WAIT)
+    bool bound_ok = false;
+    {
+        const int kMaxBindRetries = 50;        // ~10s at 200ms per attempt
+        int attempt = 0;
+        for (;;) {
+            if (listen_sock_.create() && listen_sock_.bind(cfg_.nodes[id_].port)) {
+                bound_ok = true;
+                break; // ok
+            }
+            listen_sock_.close();
+            ++attempt;
+            if (attempt >= kMaxBindRetries) {
+                std::cerr << "[!] Node " << id_ << " failed to bind after "
+                          << kMaxBindRetries << " attempts on port "
+                          << cfg_.nodes[id_].port << "\n";
+                break;
+            }
+            std::this_thread::sleep_for(milliseconds(200));
+        }
+        if (bound_ok) {
+            if (!listen_sock_.listen(16)) {
+                std::cerr << "[!] Failed to listen on SCTP socket\n";
+            } else {
+                // Startup line per node so stdout-<id>.log always shows a first event
+                std::cout << "[*] " << id_ << " listening on port "
+                          << cfg_.nodes[id_].port << " with "
+                          << expected_links << " neighbors\n";
+            }
         }
     }
-}
 
-std::string MapProtocol::pick_random_payload() {
-    // Keep it tiny—payload is irrelevant for Part 1/3
-    return "x";
-}
-
-int MapProtocol::pick_random_neighbor() {
-    const auto& nbs = cfg_.neighbors[id_];
-    if (nbs.empty()) return -1;
-    std::uniform_int_distribution<int> dist(0, static_cast<int>(nbs.size()) - 1);
-    return nbs[dist(rng_)];
-}
-
-void MapProtocol::run() {
-    // 1) Create SCTP connections
-    establish_connections();
-
-    // 2) Start receiver threads
-    for (const auto& kv : links_) {
-        int nb = kv.first;
-        recv_threads_.emplace_back(&MapProtocol::receiver_loop, this, nb);
+    // 2) Start acceptor thread (only useful if we're listening)
+    std::atomic<bool> accepting(true);
+    std::thread acceptor_thread;
+    if (bound_ok && expected_links > 0) {
+        acceptor_thread = std::thread(&MapProtocol::acceptor_loop, this,
+                                      &accepting, expected_links);
     }
 
-    // 3) Start driver + snapshot timer
-    driver_thread_ = std::thread(&MapProtocol::driver_loop, this);
-    snapshot_thread_ = std::thread(&MapProtocol::snapshot_timer_loop, this);
+    // 3) Outgoing connects with HELLO handshake
+    for (size_t idx = 0; idx < cfg_.neighbors[id_].size(); ++idx) {
+        int nb = cfg_.neighbors[id_][idx];
 
-    // 4) If initially active, wake the driver
-    if (is_active_.load()) cv_.notify_one();
+        // If acceptor already created it, skip
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            if (links_.find(nb) != links_.end()) {
+                continue;
+            }
+        }
 
-    // 5) Block forever (Ctrl-C/cleanup.sh will kill the process)
-    driver_thread_.join(); // (In practice unreachable until stop_ becomes true)
-    snapshot_thread_.join();
-    for (auto& t : recv_threads_) t.join();
+        const NodeInfo& info = cfg_.nodes[nb];
+        const steady_clock::time_point deadline =
+            steady_clock::now() + seconds(40); // allow peers to come up
+
+        SCTPSocket s;
+        if (!s.create()) {
+            std::cerr << "[!] " << id_ << " failed to create socket for neighbor " << nb << "\n";
+            continue;
+        }
+
+        bool connected = false;
+        while (!stop_.load() && steady_clock::now() < deadline) {
+            // NEW: if acceptor already formed this link, stop retrying outbound
+            {
+                std::lock_guard<std::mutex> lk(m_);
+                if (links_.find(nb) != links_.end()) {
+                    connected = true;
+                    break;
+                }
+            }
+
+            if (s.connect(info.host, info.port)) {
+                // Send our HELLO and expect theirs
+                (void)s.send(make_hello(id_));
+                std::string hello;
+                if (s.receive(hello)) {
+                    int peer_id = -1;
+                    if (parse_hello(hello, peer_id) && peer_id == nb) {
+                        std::lock_guard<std::mutex> lk(m_);
+                        if (links_.find(nb) == links_.end()) {
+                            links_[nb] = std::move(s);
+                            std::cout << "[+] " << id_ << " connected to "
+                                      << nb << " (" << info.host << ":" << info.port << ")\n";
+                        } else {
+                            // acceptor won the race; close outbound
+                            s.close();
+                        }
+                        connected = true;
+                        break;
+                    }
+                }
+                // Handshake failed → recreate and retry
+                s.close();
+                s.create();
+            }
+            std::this_thread::sleep_for(milliseconds(200));
+        }
+
+        if (!connected) {
+            // Only complain if we still don't have the link
+            std::lock_guard<std::mutex> lk(m_);
+            if (links_.find(nb) == links_.end()) {
+                std::cerr << "[!] " << id_ << " could not connect to neighbor "
+                          << nb << " (" << info.host << ":" << info.port
+                          << ") within timeout\n";
+            }
+        }
+    }
+
+    // 4) Grace for late accepts, stop accepting, close listener
+    if (acceptor_thread.joinable()) {
+        const steady_clock::time_point grace_deadline =
+            steady_clock::now() + seconds(2);
+        while (static_cast<int>(links_.size()) < expected_links &&
+               steady_clock::now() < grace_deadline) {
+            std::this_thread::sleep_for(milliseconds(50));
+        }
+        accepting.store(false);
+        acceptor_thread.join();
+    }
+    listen_sock_.close();
+
+    // 5) Summary
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        std::cout << "[*] Node " << id_ << " established "
+                  << links_.size() << " / " << expected_links << " links.\n";
+    }
+}
+
+// -------------------- output --------------------
+void MapProtocol::record_initial_snapshot() {
+    std::lock_guard<std::mutex> lk(m_);
+    snapshot_mgr_.record_snapshot(vc_); // writes logs/<config>-<id>.out
+}
+
+// -------------------- run --------------------
+void MapProtocol::run() {
+    establish_connections();
+    record_initial_snapshot();
+
+    // Keep alive so launcher captures stdout/stderr to logs/
+    while (!stop_.load()) {
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+    }
 }

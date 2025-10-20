@@ -1,73 +1,67 @@
 // include/map_protocol.hpp
 /****************************************************************************
  * file: map_protocol.hpp
- * author: luke le
  * description:
- * Minimal MAP protocol + vector clocks (Part 1 & 3) using persistent SCTP links.
+ *   Minimal scaffold: connections + initial snapshot (no lambdas).
  ****************************************************************************/
 #ifndef MAP_PROTOCOL_HPP
 #define MAP_PROTOCOL_HPP
 
 #include "config.hpp"
 #include "sctp_wrapper.hpp"
-#include "message.hpp"
 #include "snapshot_manager.hpp"
 
-#include <vector>
 #include <map>
-#include <thread>
+#include <vector>
 #include <mutex>
-#include <condition_variable>
 #include <atomic>
 #include <random>
+#include <string>
 
 class MapProtocol {
 public:
     MapProtocol(const Config& cfg, int node_id);
-
-    // Blocking run; returns when process is terminated externally (Ctrl-C) or
-    // when we finish sending maxNumber bursts and no further activation occurs.
-    void run();
+    void run(); // blocking
 
 private:
+    // --- connection setup ---
     void establish_connections();
-    void receiver_loop(int neighbor_id); // one thread per neighbor
-    void driver_loop();                  // sends bursts when active
-    void snapshot_timer_loop();          // temporary: periodic VC recording
 
-    void on_receive_app(int from, const std::vector<int>& msg_vc,
-                        const std::string& payload);
+    // accept loop run by a thread (no lambdas)
+    void acceptor_loop(std::atomic<bool>* accepting,
+                       int expected_links);
 
-    // helpers
-    std::string pick_random_payload();
-    int pick_random_neighbor();
+    // --- utilities ---
+    bool is_neighbor(int peer_id) const;
+    void record_initial_snapshot();
+
+    // handshake helpers
+    static std::string make_hello(int id);
+    static bool parse_hello(const std::string& s, int& out_id);
 
 private:
+    // immutable config
     const Config cfg_;
     const int id_;
+
+    // vector clock (size n)
     std::vector<int> vc_;
 
-    // neighbor_id -> SCTPSocket
+    // neighbor_id -> persistent SCTP link
     std::map<int, SCTPSocket> links_;
 
-    // listening socket
+    // listening socket (only during setup)
     SCTPSocket listen_sock_;
 
-    // concurrency
+    // concurrency/state
     std::mutex m_;
-    std::condition_variable cv_;
-    std::atomic<bool> is_active_;
-    int sent_total_; // guarded by m_ (small increments)
     std::atomic<bool> stop_;
 
-    // RNG
+    // rng
     std::mt19937 rng_;
 
-    // snapshot
+    // output manager (writes logs/<config>-<id>.out)
     SnapshotManager snapshot_mgr_;
-    std::vector<std::thread> recv_threads_;
-    std::thread driver_thread_;
-    std::thread snapshot_thread_;
 };
 
 #endif // MAP_PROTOCOL_HPP
