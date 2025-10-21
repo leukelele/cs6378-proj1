@@ -30,7 +30,7 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    print_config(cfg);
+    //print_config(cfg);
 
     if (node_id < 0 || node_id >= cfg.n) {
         std::cerr << "Invalid node ID: " << node_id << "\n";

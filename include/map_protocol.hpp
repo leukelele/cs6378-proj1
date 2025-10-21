@@ -10,6 +10,7 @@
 #include "config.hpp"
 #include "sctp_wrapper.hpp"
 #include "snapshot_manager.hpp"
+#include "termination_manager.hpp"
 
 #include <map>
 #include <vector>
@@ -22,6 +23,7 @@ class MapProtocol {
 public:
     MapProtocol(const Config& cfg, int node_id);
     void run(); // blocking
+    TerminationManager termination_mgr_;
 
 private:
     // --- connection setup ---
@@ -62,6 +64,10 @@ private:
 
     // output manager (writes logs/<config>-<id>.out)
     SnapshotManager snapshot_mgr_;
+
+    bool is_active_;
+    int messages_sent_;
+    void initialize_state();
 };
 
 #endif // MAP_PROTOCOL_HPP

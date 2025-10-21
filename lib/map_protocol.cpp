@@ -35,11 +35,11 @@ MapProtocol::MapProtocol(const Config& cfg, int node_id)
       vc_(cfg.n, 0),
       stop_(false),
       rng_(static_cast<unsigned>(
-               std::chrono::steady_clock::now().time_since_epoch().count()) ^
-           static_cast<unsigned>(node_id * 0x9e3779b1u)),
-      snapshot_mgr_(node_id, cfg.config_name, cfg.n)
+          std::chrono::steady_clock::now().time_since_epoch().count()) ^
+          static_cast<unsigned>(node_id * 0x9e3779b1u)),
+      snapshot_mgr_(node_id, cfg.config_name, cfg.n),
+      termination_mgr_(node_id, cfg.n) // ← Add this
 {
-    // Force line-buffered behavior so each '\n' flushes (useful under nohup)
     std::cout.setf(std::ios::unitbuf);
     std::cerr.setf(std::ios::unitbuf);
 }
@@ -48,6 +48,16 @@ MapProtocol::MapProtocol(const Config& cfg, int node_id)
 bool MapProtocol::is_neighbor(int peer_id) const {
     const std::vector<int>& nbs = cfg_.neighbors[id_];
     return std::find(nbs.begin(), nbs.end(), peer_id) != nbs.end();
+}
+
+void MapProtocol::initialize_state() {
+    // Randomly decide if this node is initially active
+    // For now, make node 0 always active, others passive
+    is_active_ = (id_ == 0);
+    messages_sent_ = 0;
+
+    std::cout << "[*] Node " << id_ << " initial state: "
+              << (is_active_ ? "ACTIVE" : "PASSIVE") << "\n";
 }
 
 // -------------------- acceptor thread function --------------------
@@ -175,6 +185,8 @@ void MapProtocol::establish_connections() {
                 }
             }
 
+            std::cerr << "[~] " << id_ << " retrying connection to " << nb
+          << " (" << info.host << ":" << info.port << ")\n";
             if (s.connect(info.host, info.port)) {
                 // Send our HELLO and expect theirs
                 (void)s.send(make_hello(id_));
@@ -213,25 +225,117 @@ void MapProtocol::establish_connections() {
         }
     }
 
-    // 4) Grace for late accepts, stop accepting, close listener
-    if (acceptor_thread.joinable()) {
-        const steady_clock::time_point grace_deadline =
-            steady_clock::now() + seconds(2);
-        while (static_cast<int>(links_.size()) < expected_links &&
-               steady_clock::now() < grace_deadline) {
-            std::this_thread::sleep_for(milliseconds(50));
+// 4) Grace for late accepts, wait until all expected links are formed
+if (acceptor_thread.joinable()) {
+    while (true) {
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            if (static_cast<int>(links_.size()) >= expected_links) {
+                break;
+            }
         }
-        accepting.store(false);
-        acceptor_thread.join();
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
+    accepting.store(false);
+    acceptor_thread.join();
+    std::cout << "[*] Node " << id_ << " acceptor thread joined.\n";
+}
+
+// Final connection summary
+{
+    std::lock_guard<std::mutex> lk(m_);
+    std::cout << "[*] Node " << id_ << " established "
+              << links_.size() << " / " << expected_links << " links.\n";
+
+    if (static_cast<int>(links_.size()) < expected_links) {
+        std::cerr << "[!] Node " << id_ << " missing connections to: ";
+        for (int nb : cfg_.neighbors[id_]) {
+            if (links_.find(nb) == links_.end()) {
+                std::cerr << nb << " ";
+            }
+        }
+        std::cerr << "\n";
+    }
+}
+
+// Only close listener if all links are made
+if (static_cast<int>(links_.size()) >= expected_links) {
     listen_sock_.close();
+}
+
+// Final connection summary
+{
+    std::lock_guard<std::mutex> lk(m_);
+    std::cout << "[*] Node " << id_ << " established "
+              << links_.size() << " / " << expected_links << " links.\n";
+
+    if (static_cast<int>(links_.size()) < expected_links) {
+        std::cerr << "[!] Node " << id_ << " missing connections to: ";
+        for (int nb : cfg_.neighbors[id_]) {
+            if (links_.find(nb) == links_.end()) {
+                std::cerr << nb << " ";
+            }
+        }
+        std::cerr << "\n";
+    }
+}
+
+// Only close listener if all links are made
+if (static_cast<int>(links_.size()) >= expected_links) {
+    listen_sock_.close();
+}
+
+// Final connection summary
+{
+    std::lock_guard<std::mutex> lk(m_);
+    std::cout << "[*] Node " << id_ << " established "
+              << links_.size() << " / " << expected_links << " links.\n";
+
+    if (static_cast<int>(links_.size()) < expected_links) {
+        std::cerr << "[!] Node " << id_ << " missing connections to: ";
+        for (int nb : cfg_.neighbors[id_]) {
+            if (links_.find(nb) == links_.end()) {
+                std::cerr << nb << " ";
+            }
+        }
+        std::cerr << "\n";
+    }
+}
+
+// Only close listener if all links are made
+if (static_cast<int>(links_.size()) >= expected_links) {
+    listen_sock_.close();
+}
 
     // 5) Summary
     {
         std::lock_guard<std::mutex> lk(m_);
         std::cout << "[*] Node " << id_ << " established "
                   << links_.size() << " / " << expected_links << " links.\n";
+
+
+        if (static_cast<int>(links_.size()) < expected_links) {
+            std::cerr << "[!] Node " << id_ << " missing connections to: ";
+            for (int nb : cfg_.neighbors[id_]) {
+                if (links_.find(nb) == links_.end()) {
+                    std::cerr << nb << " ";
+                }
+            }
+            std::cerr << "\n";
+        }
     }
+{
+    std::lock_guard<std::mutex> lk(m_);
+    if (static_cast<int>(links_.size()) < expected_links) {
+        std::cerr << "[!] Node " << id_ << " missing connections to: ";
+        for (int nb : cfg_.neighbors[id_]) {
+            if (links_.find(nb) == links_.end()) {
+                std::cerr << nb << " ";
+            }
+        }
+        std::cerr << "\n";
+    }
+}
 }
 
 // -------------------- output --------------------
@@ -243,6 +347,7 @@ void MapProtocol::record_initial_snapshot() {
 // -------------------- run --------------------
 void MapProtocol::run() {
     establish_connections();
+    initialize_state();
     record_initial_snapshot();
 
     // Keep alive so launcher captures stdout/stderr to logs/
