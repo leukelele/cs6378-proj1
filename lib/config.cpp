@@ -9,12 +9,13 @@
  *     private to the translation unit without the extra boiler plate and 
  *     is especially efficient for this simple use case.
  ****************************************************************************/
-
 #include "config.hpp"
-#include <iostream>
-#include <fstream>
-#include <sstream>
+
+#include <algorithm>
 #include <cctype>
+#include <fstream>
+#include <iostream>
+#include <sstream>
 
 using namespace std;
 
@@ -32,10 +33,8 @@ namespace {
      */
     string trim(const string &s) {
         size_t a = s.find_first_not_of(" \t\r\n");
-        /**
-         * in C++, npos is a special constant defined in the std::string class
-         * that represents “not found” or an invalid position.
-         */
+        // in C++, npos is a special constant defined in the std::string class
+        // that represents “not found” or an invalid position.
         if (a == string::npos) return "";
         size_t b = s.find_last_not_of(" \t\r\n");
         return s.substr(a, b - a + 1);
@@ -56,12 +55,13 @@ namespace {
 
     /**
      * @brief determine if a line is considered a valid config line; a valid
+     *        line starts with a digit
      *
-     * line starts with a digit
-     * @param line Input string.
-     * @return True if valid, false otherwise.
+     * @param line input string.
+     * @return true if valid, false otherwise.
      */
     bool is_valid_line(const string &line) {
+        // if line is not empty, accesses the first char of the string
         return !line.empty() && isdigit(static_cast<unsigned char>(line[0]));
     } // is_valid_line()
 
@@ -87,7 +87,7 @@ namespace {
     bool open_file(const string &path, ifstream &in) {
         in.open(path);
         if (!in.is_open()) {
-            cerr << "Cannot open config file: " << path << "\n";
+            cerr << "[!] cannot open config file: " << path << "\n";
             return false;
         }
         return true;
@@ -95,8 +95,8 @@ namespace {
 
     /**
      * @brief read all lines from a file stream, clean them, and filter valid
+     *        config lines
      *
-     * config lines
      * @param in open file stream.
      * @return vector of valid, trimmed lines.
      */
@@ -115,7 +115,7 @@ namespace {
 
     /**
      * @brief top-level helper, reads valid lines from a file and extract
-     * config name
+     *        config name
      *
      * @param path path to config file
      * @param validLines output vector with valid lines
@@ -144,7 +144,7 @@ namespace {
         if (!(iss >> cfg.n >> cfg.minPerActive >> cfg.maxPerActive 
                   >> cfg.minSendDelay_ms >> cfg.snapshotDelay_ms 
                   >> cfg.maxNumber)) {
-            cerr << "Invalid first config line\n";
+            cerr << "[!] invalid first config line\n";
             return false;
         }
         return true;
@@ -163,7 +163,7 @@ namespace {
             istringstream iss(lines[i]);
             int id; string host; int port;
             if (!(iss >> id >> host >> port)) {
-                cerr << "Invalid node line: " << lines[i] << "\n";
+                cerr << "[!] invalid node line: " << lines[i] << "\n";
                 return false;
             }
             cfg.nodes[id] = {id, host, port};
@@ -190,13 +190,154 @@ namespace {
         }
         return true;
     } // parse_neighbors()
+    
+    /**
+     * @brief verifies that all neighbor relationships in the config are
+     *        bidirectional.
+     *
+     * Ensures that if node i lists node j as a neighbor, then node j also
+     * lists node i as a neighbor; prints any inconsistencies found.
+     *
+     * @param cfg configuration structure containing neighbors
+     * @return true if all neighbor relations are bidirectional,
+     *         false otherwise
+     */
+    bool check_bidirectional_neighbors(const Config &cfg) {
+        bool allBidirectional = true;
+    
+        for (size_t i = 0; i < cfg.neighbors.size(); ++i) {
+            for (int j : cfg.neighbors[i]) {
+                // check bounds
+                if (j < 0 || static_cast<size_t>(j) >= cfg.neighbors.size()) {
+                    cerr << "[!] invalid neighbor index: node " << i
+                         << " references out-of-range node " << j << "\n";
+                    allBidirectional = false;
+                    continue;
+                }
+
+                // check that node j lists i as a neighbor
+                const auto &nbrsOfJ = cfg.neighbors[j];
+                if (find(nbrsOfJ.begin(), nbrsOfJ.end(),
+                            static_cast<int>(i)) == nbrsOfJ.end()) {
+                    cerr << "[!] neighbor mismatch: (node " << i
+                         << ") lists " << j
+                         << " but (node " << j
+                         << ") does not list " << i << "\n";
+                    allBidirectional = false;
+                }
+            }
+        }
+        return allBidirectional;
+    } // check_bidirectional_neighbors()
 
 } // end anonymous namespace
 
-//   the following exposes internals for testing (if enabled)
+/**
+ * 1. read all valid, non-empty, non-comment lines from the file using
+ *    `read_valid_lines()`. If no valid lines are found, returns false.
+ * 2. parse the first line (global settings) with `parse_globals()`.
+ *    If parsing fails, returns false.
+ * 3. check that the number of valid lines is sufficient for `n` nodes:
+ *    - Expected lines: 1 (globals) + n (nodes) + n (neighbors) = 2*n + 1
+ *    - If there are fewer lines, return false.
+ * 4. slice the valid lines into:
+ *    - Node lines (`validLines[1]` to `validLines[n]`)
+ *    - Neighbor lines (`validLines[n+1]` to `validLines[2*n]`)
+ * 5. parse the node definitions using `parse_nodes()`.
+ *    If parsing fails, return false.
+ * 6. parse the neighbor definitions using `parse_neighbors()`.
+ *    Always returns true, but still checked for consistency.
+ * 7. check that the config file contains bidirectional nodes.
+ * 8. if all steps succeed, return true.
+ */
+bool parse_config(const string &path, Config &cfg) {
+    vector<string> validLines;
+
+    // 1: read valid, trimmed lines from file
+    if (!read_valid_lines(path, validLines, cfg.config_name)) {
+        cerr << "[!] no valid lines found in config\n";
+        return false;
+    }
+
+    // 2: parse global settings
+    if (!parse_globals(validLines[0], cfg)) return false;
+
+    // 3: check number of valid lines
+    size_t expected = static_cast<size_t>(2 * cfg.n + 1);
+    if (validLines.size() < expected) {
+        cerr << "[!] config has fewer than expected valid lines. expected >= "
+             << expected << " got " << validLines.size() << "\n";
+        return false;
+    }
+
+    // 4: slice lines into nodes and neighbors
+    auto nodeBegin = validLines.begin() + 1;
+    auto nodeEnd = nodeBegin + cfg.n;
+    auto neighborBegin = nodeEnd;
+    auto neighborEnd = neighborBegin + cfg.n;
+
+    // 5: parse node definitions
+    if (!parse_nodes({nodeBegin, nodeEnd}, cfg)) return false;
+
+    // 6: parse neighbor definitions
+    if (!parse_neighbors({neighborBegin, neighborEnd}, cfg)) return false;
+
+    // 7: ensure bidirectional topology
+    if (!check_bidirectional_neighbors(cfg)) {
+        cerr << "[!] configuration has unidirectional or "
+             << "invalid neighbor links.\n";
+        return false;
+    }
+    // 8: success
+    return true;
+} // parse_config()
+
+void print_config(const Config &cfg) {
+    cout << "[+] config file: " << cfg.config_name << "\n";
+    cout << "[-] parsed content is as follows:" << "\n\n";
+
+    // print global variables
+    cout << "    === global parameters ===\n";
+    cout << "    number of nodes (n):       " << cfg.n << "\n";
+    cout << "    minPerActive:              " << cfg.minPerActive << "\n";
+    cout << "    maxPerActive:              " << cfg.maxPerActive << "\n";
+    cout << "    minSendDelay (ms):         " << cfg.minSendDelay_ms << "\n";
+    cout << "    snapshotDelay (ms):        " << cfg.snapshotDelay_ms << "\n";
+    cout << "    maxNumber:                 " << cfg.maxNumber << "\n\n";
+
+    // print node information
+    cout << "    === nodes ===\n";
+    for (const auto &node : cfg.nodes) {
+        cout << "    node ID: " << node.id
+                  << " | host: " << node.host
+                  << " | port: " << node.port << "\n";
+    }
+
+    // print neighbors
+    cout << "\n    === neighbors ===\n";
+    for (size_t i = 0; i < cfg.neighbors.size(); ++i) {
+        cout << "    node " << i << " neighbors: ";
+        if (cfg.neighbors[i].empty()) {
+            cout << "(none)";
+        } else {
+            for (size_t j = 0; j < cfg.neighbors[i].size(); ++j) {
+                cout << cfg.neighbors[i][j];
+                if (j + 1 < cfg.neighbors[i].size())
+                    cout << ", ";
+            }
+        }
+        cout << "\n";
+    }
+} // print_config()
+
+
+
+
+// the following exposes internals for testing (if enabled):
 #ifdef ENABLE_TESTS
 
-string testable_trim(const string &s) { return trim(s); }
+string testable_trim(const string &s)
+{ return trim(s); }
 
 string testable_strip_comments(const string &line)
 { return strip_comments(line); }
@@ -226,114 +367,7 @@ bool testable_parse_nodes(const vector<string> &lines, Config &cfg)
 bool testable_parse_neighbors(const vector<string> &lines, Config &cfg)
 { return parse_neighbors(lines, cfg); }
 
+bool testable_check_bidirectional_neighbors(const Config &cfg)
+{ return check_bidirectional_neighbors(cfg); }
+
 #endif // ENABLE_TESTS
-
-/**
- * @brief top-level function to parse a config file and fill a 'Config' struct
- * 
- * reads a config file, extracts valid lines, and populates the fields of
- * the provided Config struct (`cfg`). This includes:
- *   - Global settings (first line)
- *   - Node definitions
- *   - Neighbor definitions
- *
- * @param path path to the config file
- * @param cfg config struct to fill with parsed values
- * @return true if parsing succeeded, false otherwise
- *
- * the function performs the following steps:
- * 1. read all valid, non-empty, non-comment lines from the file using
- *    `read_valid_lines()`. If no valid lines are found, returns false.
- * 2. parse the first line (global settings) with `parse_globals()`.
- *    If parsing fails, return false.
- * 3. check that the number of valid lines is sufficient for `n` nodes:
- *    - Expected lines: 1 (globals) + n (nodes) + n (neighbors) = 2*n + 1
- *    - If there are fewer lines, return false.
- * 4. slice the valid lines into:
- *    - Node lines (`validLines[1]` to `validLines[n]`)
- *    - Neighbor lines (`validLines[n+1]` to `validLines[2*n]`)
- * 5. parse the node definitions using `parse_nodes()`.
- *    If parsing fails, return false.
- * 6. parse the neighbor definitions using `parse_neighbors()`.
- *    Always returns true, but still checked for consistency.
- * 7. ff all steps succeed, return true.
- */
-bool parse_config(const string &path, Config &cfg) {
-    vector<string> validLines;
-
-    // 1: read valid, trimmed lines from file
-    if (!read_valid_lines(path, validLines, cfg.config_name)) {
-        cerr << "No valid lines found in config\n";
-        return false;
-    }
-
-    // 2: parse global settings
-    if (!parse_globals(validLines[0], cfg)) return false;
-
-    // 3: check number of valid lines
-    size_t expected = static_cast<size_t>(2 * cfg.n + 1);
-    if (validLines.size() < expected) {
-        cerr << "Config has fewer than expected valid lines. expected >= "
-             << expected << " got " << validLines.size() << "\n";
-        return false;
-    }
-
-    // 4: slice lines into nodes and neighbors
-    auto nodeBegin = validLines.begin() + 1;
-    auto nodeEnd = nodeBegin + cfg.n;
-    auto neighborBegin = nodeEnd;
-    auto neighborEnd = neighborBegin + cfg.n;
-
-    // 5: parse node definitions
-    if (!parse_nodes({nodeBegin, nodeEnd}, cfg)) return false;
-
-    // 6: parse neighbor definitions
-    if (!parse_neighbors({neighborBegin, neighborEnd}, cfg)) return false;
-
-    // 7: all successful
-    return true;
-} // parse_config()
-
-/**
- * @brief prints the parsed contents stored in 'Config'
- *
- * @param cfg config struct for printing
- */
-void print_config(const Config &cfg) {
-    cout << "[!] Config parsed successfully!\n";
-    cout << "[*] Config file: " << cfg.config_name << "\n";
-    cout << "[*] Parsed content is as follows:" << "\n";
-
-    // print global variables
-    cout << "=== Global Parameters ===\n";
-    cout << "Number of nodes (n):       " << cfg.n << "\n";
-    cout << "minPerActive:              " << cfg.minPerActive << "\n";
-    cout << "maxPerActive:              " << cfg.maxPerActive << "\n";
-    cout << "minSendDelay (ms):         " << cfg.minSendDelay_ms << "\n";
-    cout << "snapshotDelay (ms):        " << cfg.snapshotDelay_ms << "\n";
-    cout << "maxNumber:                 " << cfg.maxNumber << "\n\n";
-
-    // print node information
-    cout << "=== Nodes ===\n";
-    for (const auto &node : cfg.nodes) {
-        cout << "Node ID: " << node.id
-                  << " | Host: " << node.host
-                  << " | Port: " << node.port << "\n";
-    }
-
-    // print neighbors
-    cout << "\n=== Neighbors ===\n";
-    for (size_t i = 0; i < cfg.neighbors.size(); ++i) {
-        cout << "Node " << i << " neighbors: ";
-        if (cfg.neighbors[i].empty()) {
-            cout << "(none)";
-        } else {
-            for (size_t j = 0; j < cfg.neighbors[i].size(); ++j) {
-                cout << cfg.neighbors[i][j];
-                if (j + 1 < cfg.neighbors[i].size())
-                    cout << ", ";
-            }
-        }
-        cout << "\n";
-    }
-} // print_config()
