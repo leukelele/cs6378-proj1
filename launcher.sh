@@ -4,13 +4,13 @@ IFS=$'\n\t'
 
 CONFIG_FILE="ds/config.txt"
 EXECUTABLE="build/proj1"
-REMOTE_DIR="$HOME/project"       # adjust if paths differs
-LOG_DIR="$REMOTE_DIR/logs"       # logs are written under project/logs
+REMOTE_DIR="$HOME/project"       # adjust if paths differ
+LOG_DIR="$REMOTE_DIR/logs"
 SSH_USER="lbl190001"
 
-echo "[*] Parsing config file (comment-aware): $CONFIG_FILE"
+echo "[-] parsing config file (comment-aware): $CONFIG_FILE"
 
-# keep only valid (non-empty, non-comment) lines that START WITH A DIGIT
+# extract valid, non-comment lines that start with a digit
 valid_lines() {
   sed 's/#.*$//' "$CONFIG_FILE" \
   | sed 's/^[[:space:]]\+//; s/[[:space:]]\+$//' \
@@ -28,28 +28,27 @@ normalize_host() {
   fi
 }
 
-# read valid lines
+# parse valid lines
 mapfile -t VLINES < <( valid_lines )
 if ((${#VLINES[@]} == 0)); then
-  echo "[!] No valid lines found in $CONFIG_FILE" >&2
+  echo "[!] no valid lines found in $CONFIG_FILE" >&2
   exit 1
 fi
 
-# globals and n
 GLOBALS="${VLINES[0]}"
 NUM_NODES=$(awk '{print $1}' <<< "$GLOBALS")
 if ! [[ "$NUM_NODES" =~ ^[0-9]+$ ]]; then
-  echo "[!] Could not parse node count from globals: '$GLOBALS'" >&2
+  echo "[!] could not parse node count from globals: '$GLOBALS'" >&2
   exit 1
 fi
 
-# verification; needs at least globals + n node lines
+# verify enough lines
 if ((${#VLINES[@]} < 1 + NUM_NODES)); then
-  echo "[!] Config too short: expected >= $((1+NUM_NODES)) valid lines, got ${#VLINES[@]}" >&2
+  echo "[!] config too short: expected >= $((1+NUM_NODES)) valid lines, got ${#VLINES[@]}" >&2
   exit 1
 fi
 
-# parse nodes (next NUM_NODES lines)
+# parse node entries
 declare -a NODE_IDS NODE_HOSTS NODE_PORTS
 for ((i=0; i<NUM_NODES; i++)); do
   line="${VLINES[1+i]}"
@@ -57,7 +56,7 @@ for ((i=0; i<NUM_NODES; i++)); do
   host_raw=$(awk '{print $2}' <<< "$line")
   port=$(awk '{print $3}' <<< "$line")
   if [[ -z "$nid" || -z "$host_raw" || -z "$port" ]]; then
-    echo "[!] Invalid node line at index $i: '$line'" >&2
+    echo "[!] invalid node line at index $i: '$line'" >&2
     exit 1
   fi
   NODE_IDS[i]="$nid"
@@ -65,20 +64,21 @@ for ((i=0; i<NUM_NODES; i++)); do
   NODE_PORTS[i]="$port"
 done
 
-# determine if a host is this machine (supports both short and FQDN)
+# identify this host and helper functions
 local_host_short=$(hostname -s 2>/dev/null || echo "")
 local_host_full=$(hostname -f 2>/dev/null || echo "")
+
 is_local_host() {
   local h="$1"
   [[ "$h" == "$local_host_short" || "$h" == "$local_host_full" ]]
 }
 
-# ensure local logs dir exists (NFS-shared across dcXX)
-mkdir -p "logs"
+# create logs directory (shared NFS)
+mkdir -p "$LOG_DIR"
 
 launch_local() {
   local node_id="$1"
-  echo "  - node $node_id on $(hostname -f) [local]"
+  echo "  - launching node $node_id on $(hostname -f) [local]"
   (
     cd "$REMOTE_DIR"
     mkdir -p logs
@@ -91,7 +91,7 @@ launch_local() {
 launch_remote() {
   local host="$1"
   local node_id="$2"
-  echo "  - node $node_id on $host"
+  echo "  - launching node $node_id on $host [remote]"
   ssh -n -f "${SSH_USER}@${host}" "bash -lc '
     set -e
     cd \"$REMOTE_DIR\"
@@ -103,7 +103,23 @@ launch_remote() {
   '"
 }
 
-echo "[*] Launching nodes..."
+# determine driver vs participant
+participates=false
+for ((i=0; i<NUM_NODES; i++)); do
+  if is_local_host "${NODE_HOSTS[i]}"; then
+    participates=true
+    break
+  fi
+done
+
+if ! $participates; then
+  echo "[-] this host ($(hostname -f)) is acting as DRIVER ONLY (no local node)."
+else
+  echo "[-] this host participates as a NODE in the topology."
+fi
+
+# launch all nodes
+echo "[-] launching nodes..."
 for ((i=0; i<NUM_NODES; i++)); do
   nid="${NODE_IDS[i]}"
   host="${NODE_HOSTS[i]}"
@@ -114,4 +130,4 @@ for ((i=0; i<NUM_NODES; i++)); do
   fi
 done
 
-echo "[!] All nodes launched."
+echo "[+] All nodes launched."
