@@ -1,4 +1,3 @@
-// ds/main.cpp
 #include "config.hpp"
 #include "map_protocol.hpp"
 
@@ -6,38 +5,28 @@
 #include <string>
 
 int main(int argc, char *argv[]) {
+    // arg verification
     if (argc != 2) {
-        std::cerr << "Usage: " << argv[0] << " <node_id>\n";
+        std::cerr << "usage: " << argv[0] << " <node_id>\n";
         return 1;
     }
-
     int node_id = -1;
     try {
         node_id = std::stoi(argv[1]);
     } catch (...) {
-        std::cerr << "Invalid node_id: " << argv[1] << "\n";
+        std::cerr << "[!] invalid node_id: " << argv[1] << "\n";
         return 1;
     }
 
+    // config parsing
     Config cfg;
     std::string path = CONFIG_FILE_PATH;      // set by CMake
     if (!parse_config(path, cfg)) {
-        // Fallback so remote nodes can find the file when run outside build dir
-        path = "ds/config.txt";
-        if (!parse_config(path, cfg)) {
-            std::cerr << "Failed to parse config file: " << path << "\n";
-            return 1;
-        }
-    }
-
-    //print_config(cfg);
-
-    if (node_id < 0 || node_id >= cfg.n) {
-        std::cerr << "Invalid node ID: " << node_id << "\n";
+        std::cerr << "[!] something went wrong with the config file.\n";
         return 1;
     }
 
+    // map protocol
     MapProtocol node(cfg, node_id);
-    node.run();
-    return 0;
+    return node.run();
 }
