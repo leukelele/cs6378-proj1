@@ -16,6 +16,7 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <string>
 
 using namespace std;
 
@@ -72,9 +73,14 @@ namespace {
      * @return filename without extension
      */
     string get_filename_no_ext(const string &path) {
+        // identifiers around filename
+        size_t slash = path.find_last_of("/\\");
         size_t lastdot = path.find_last_of('.');
-        if (lastdot == string::npos) return path;
-        return path.substr(0, lastdot);
+
+        size_t start = (slash == string::npos) ? 0 : slash + 1;
+        if (lastdot == string::npos || lastdot < start)
+            return path.substr(start);
+        return path.substr(start, lastdot - start);
     } // get_filename_no_ext()
 
     /**
