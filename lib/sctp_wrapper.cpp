@@ -13,6 +13,7 @@
 #include "sctp_wrapper.hpp"
 
 #include <arpa/inet.h>
+#include <errno.h>
 #include <cstring>
 #include <iostream>
 #include <netdb.h>
@@ -92,6 +93,13 @@ void SCTPSocket::set_defaults() {
     if (::setsockopt(sockfd, IPPROTO_SCTP, SCTP_NODELAY,
                      &one, sizeof(one)) < 0)
         std::perror("setsockopt(SCTP_NODELAY)");
+
+    // temporary: timeout sockets
+    struct timeval tv;
+    tv.tv_sec = 5;   // 5-second timeout
+    tv.tv_usec = 0;
+    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 } // set_defaults()
 
 bool SCTPSocket::bind(int port) {
@@ -113,7 +121,7 @@ bool SCTPSocket::bind(int port) {
     // - lack of permissions for that port (<1024 without root),
     // - SCTP support is missing
     if (::bind(sockfd, (sockaddr*)&addr, sizeof(addr)) < 0) {
-        std::cerr << "[!] failed to bind SCTP socket\n";
+        std::perror("[!] bind()");  // perror for more accurate error msg
         return false;
     }
     return true;
@@ -189,8 +197,14 @@ bool SCTPSocket::connect(const std::string &host, int port) {
 
     // performs the SCTP association handshake with kernel connect()
     bool success = (::connect(sockfd, (sockaddr*)&addr, sizeof(addr)) == 0);
-    if (!success)
-        std::cerr << "[!] failed to connect to " << host << ":" << port << "\n";
+    if (!success) {
+        int err = errno;
+        std::cerr << "[!] failed to connect to " << host << ":" << port
+                  << " (" << strerror(err) << ")\n";
+        if (err == EPROTONOSUPPORT || err == EAFNOSUPPORT) {
+            std::cerr << "[!] SCTP not supported on this system\n";
+        }
+    }
 
     freeaddrinfo(res);  // frees memory allocated by getaddrinfo()
     return success;
@@ -218,30 +232,31 @@ bool SCTPSocket::send(const std::string &message) {
 } // send()
 
 bool SCTPSocket::receive(std::string &message) {
-    // prevents leftover data from showing up in short reads
     char buffer[1024];
     std::memset(buffer, 0, sizeof(buffer));
-
-    int flags = 0;  // receive message status info
-
-    // will store the address of the sender
+    int flags = 0;
     struct sockaddr_in peerAddr;
     socklen_t len = sizeof(peerAddr);
 
-    // receive data from the socket
-    int ret = sctp_recvmsg(sockfd, buffer, sizeof(buffer), 
+    int ret = sctp_recvmsg(sockfd, buffer, sizeof(buffer),
                            (sockaddr*)&peerAddr, &len, nullptr, &flags);
     if (ret < 0) {
-        std::cerr << "[!] failed to receive SCTP message\n";
-        return false;
+        int err = errno;
+        // TIMEOUT or interrupted: not fatal—just say “no message” this tick.
+        if (err == EAGAIN || err == EWOULDBLOCK || err == EINTR) {
+            message.clear();
+            return true;  // keep socket alive
+        }
+        std::perror("[!] sctp_recvmsg");
+        return false;    // real error -> close this socket
     }
     if (ret == 0) {
-        std::cerr << "[!] connection closed by peer\n";
+        // graceful close by peer
         return false;
     }
-    message = std::string(buffer, ret);
+    message.assign(buffer, ret);
     return true;
-} // receive()
+}
 
 sockaddr_in SCTPSocket::get_peer_addr() const {
     return addr;
