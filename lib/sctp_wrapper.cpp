@@ -12,204 +12,244 @@
  ****************************************************************************/
 #include "sctp_wrapper.hpp"
 
-#include <netinet/sctp.h>
 #include <arpa/inet.h>
-#include <unistd.h>
-#include <netdb.h>
-#include <iostream>
 #include <cstring>
+#include <iostream>
+#include <netdb.h>
+#include <netinet/sctp.h>
+#include <unistd.h>
 
-// **************************************************************************
-// constructor / destructor
-// **************************************************************************
-/**
- * @brief Default constructor
- *
- * Initializes the socket file descriptor to -1 and zeroes out the address
- * structure. The actual socket is not created until create() is called.
- */
+// initialize socket in a safe "empty" state (no valid fd, cleared address)
+// - prevents accidental use of uninitialized descriptor
+// - makes close() idempotent even if create() fails
 SCTPSocket::SCTPSocket() : sockfd(-1) {
+    // 'addr' is a sockaddr_in structure; it holds address info like family,
+    // IP, and port; calling memset fills the entire structure with zero bytes
     std::memset(&addr, 0, sizeof(addr));
 } // SCTPSocket()
 
-/**
- * @brief Destructor
- *
- * Ensures that any open socket is properly closed when the object goes
- * out of scope.
- */
+// ensures that any open socket is properly closed when the object goes
+// out of scope
 SCTPSocket::~SCTPSocket() {
     close();
 } // ~SCTPSocket()
 
-// **************************************************************************
-// socket setup
-// **************************************************************************
-/**
- * @brief create an SCTP socket; calls socket() with AF_INET, SOCK_STREAM, and
- * IPPROTO_SCTP to create an SCTP socket in the 1-to-1 style (similar to TCP).
- *
- * @return true if socket creation succeeded, false otherwise
- */
-// lib/sctp_wrapper.cpp
 bool SCTPSocket::create() {
+    // creates a stream-oriented (SOCK_STREAM) socket bc the internet said to
+    // do so. The scoket is configured for IPv4 addresses (AF_INET), as there
+    // is no need to worry about anything beyond IPv4 for the dc0X servers;
+    // while IPPROTO_SCTP sets SCTP for the transport layer protocol bc the 
+    // prof. suggested this protocol makes design easier but is preferable bc
+    // it support multiple streams.
     sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_SCTP);
     if (sockfd < 0) {
-        std::cerr << "[!] Failed to create SCTP socket\n";
+        std::cerr << "[!] failed to create SCTP socket\n";
         return false;
     }
+    // this allows me to restart the program quickly on the same port
+    // without waiting 30–60 seconds for the OS to free it
     int yes = 1;
     ::setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+
+    // applies SCTP-specific tuning and ensures that every new SCTP socket is
+    // created with:
+    // - predictable behavior (1 outgoing / incoming stream),
+    // - minimal startup delay, and 
+    // - efficient message delivery.
+    //
+    // *internet supplied LOL
+    set_defaults();
     return true;
-}
+} // create()
 
 /**
- * @brief bind the SCTP socket to a local port configures the sockaddr_in
- * structure with INADDR_ANY to accept connections from any interface, and
- * binds it to the given port.
- *
- * @param port port number to bind to
- * @return true if binding succeeded, false otherwise
+ * @brief sets SCTP scocket with reasonable defaults.
  */
+void SCTPSocket::set_defaults() {
+    // sctp_initmsg is a struct defined by the SCTP API (<netinet/sctp.h>).
+    // It controls association setup parameters aka how the SCTP connection
+    // behaves when first established. memset() clears the struct to all
+    // zeros to keep behaviors consistent.
+    struct sctp_initmsg init{};
+    std::memset(&init, 0, sizeof(init));
+
+    init.sinit_num_ostreams = 1;  // num of outbound streams socket can send
+    init.sinit_max_instreams = 1; // max num of inbound the sock can accept
+    init.sinit_max_attempts = 4;  // max num SCTP will retransmit INIT chunk
+                                  // aka handshake retry count
+
+    // applies params to socket
+    if (::setsockopt(sockfd, IPPROTO_SCTP, SCTP_INITMSG,
+                     &init, sizeof(init)) < 0)
+        std::perror("setsockopt(SCTP_INITMSG)");
+
+    // disable Nagle’s algorithm for low-latency control messages, which is a
+    // TCP/SCTP feature that batches small packets together before sending
+    // them. Normally, Nagle’s algorithm helps network efficiency by combining
+    // small writes but it adds latency because it waits to accumulate more
+    // data before sending. This is no needed for this project.
+    int one = 1;
+    if (::setsockopt(sockfd, IPPROTO_SCTP, SCTP_NODELAY,
+                     &one, sizeof(one)) < 0)
+        std::perror("setsockopt(SCTP_NODELAY)");
+} // set_defaults()
+
 bool SCTPSocket::bind(int port) {
+    // config 'addr' to accept all IPv4 connections
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
+
+    // htons() = Host TO Network Short, which converts the integer from the
+    // host’s byte order to network byte order (big endian); sets 'addr' port
     addr.sin_port = htons(port);
 
+    // the ::bind() system call associates the socket descriptor (sockfd) with
+    // the given address and port. This essentially “claims” that (IP, port)
+    // on the system for that process.
+    //
+    // If it fails, it means:
+    // - port is already in use (another process bound it),
+    // - socket wasn’t created properly,
+    // - lack of permissions for that port (<1024 without root),
+    // - SCTP support is missing
     if (::bind(sockfd, (sockaddr*)&addr, sizeof(addr)) < 0) {
-        std::cerr << "[!] Failed to bind SCTP socket\n";
+        std::cerr << "[!] failed to bind SCTP socket\n";
         return false;
     }
     return true;
 } // bind()
 
-/**
- * @brief mark the socket as passive to accept incoming connections; wraps the
- * standard listen() call. SCTP uses the same function as TCP in the 1-to-1
- * model.
- *
- * @param backlog max number of pending connections
- * @return true if listen succeeded, false otherwise
- */
 bool SCTPSocket::listen(int backlog) {
+    // it tells the kernel: “I’ve bound this socket to a local port. Now 
+    // listen for incoming connection requests.” and places the socket in a 
+    // passive/listening state.
+    //
+    // the backlog paramater means the kernel can hold up to 5 pending
+    // connection requests before rejecting new ones with an
+    // error (ECONNREFUSED).
     if (::listen(sockfd, backlog) < 0) {
-        std::cerr << "[!] Failed to listen on SCTP socket\n";
+        std::cerr << "[!] failed to listen on SCTP socket\n";
         return false;
     }
     return true;
 } // listen()
 
-// **************************************************************************
-// connection management
-// **************************************************************************
-/**
- * @brief accept an incoming SCTP connection; waits for an incoming connection
- * on the bound SCTP socket. On success, initializes the provided SCTPSocket
- * object with the accepted file descriptor and client address.
- *
- * @param clientSocket reference to an SCTPSocket to hold the accepted connection
- * @return true if accept succeeded, false otherwise
- */
 bool SCTPSocket::accept(SCTPSocket &clientSocket) {
     sockaddr_in clientAddr;
     socklen_t len = sizeof(clientAddr);
+
+    // ::accept() system call waits (blocks) until a connection request
+    // arrives on the listening socket (sockfd). When a connection request is
+    // received, the kernel:
+    // - creates a new socket specifically for this client connection
+    // - copies the client’s addr info into 'clientAddr'
+    // - leaves the og sockfd in the listening state so it can accept more
+    //   connections later
     int clientFd = ::accept(sockfd, (sockaddr*)&clientAddr, &len);
     if (clientFd < 0) {
-        std::cerr << "[!] Failed to accept SCTP connection\n";
+        std::cerr << "[!] failed to accept SCTP connection\n";
         return false;
     }
+
+    // copy the newly accepted connection’s file descriptor and address info 
+    // into another SCTPSocket object. This is the one passed by reference
+    // (clientSocket).
+    //
+    //The design allows the func to return the connected socket through an
+    //existing object rather than constructing a new one.
     clientSocket.sockfd = clientFd;
     clientSocket.addr = clientAddr;
     return true;
 } // accept()
 
-/**
- * @brief Connect to a remote SCTP server; resolves the hostname to an IP
- * address using gethostbyname(), then attempts to connect to the specified
- * port on that host.
- *
- * @param host hostname or IP address to connect to
- * @param port remote port number
- * @return true if connection succeeded, false otherwise
- */
 bool SCTPSocket::connect(const std::string &host, int port) {
-    hostent *server = gethostbyname(host.c_str());
-    if (!server) {
-        std::cerr << "[!] No such host: " << host << "\n";
+    // addrinfo is a POSIX structure used for host name resolution
+    // (used by getaddrinfo()). 'hints' tells resolver what kind of address
+    // to look for. 'res' will hold the results returned by getaddrinfo()
+    struct addrinfo hints{}, *res = nullptr;
+    std::memset(&hints, 0, sizeof(hints));
+
+    // basically, “I want IPv4 addresses suitable for a stream-based socket.” 
+    hints.ai_family = AF_INET;       // IPv4
+    hints.ai_socktype = SOCK_STREAM; // SCTP 1-to-1 behaves like stream sock
+
+    // converts human-readable hostname into a usable sockaddr_in struct
+    int rc = getaddrinfo(host.c_str(), nullptr, &hints, &res);
+    if (rc != 0 || res == nullptr) {
+        std::cerr << "[!] failed to resolve host: " << host << "\n";
         return false;
     }
+    struct sockaddr_in *ipv4 = (struct sockaddr_in *)res->ai_addr;
 
+    // sets `addr` struct to the destination host and port, which is converted
+    // to network byte order with htons() so it’s consistent across arch
     addr.sin_family = AF_INET;
-    std::memcpy(&addr.sin_addr.s_addr, server->h_addr, server->h_length);
+    addr.sin_addr = ipv4->sin_addr;
     addr.sin_port = htons(port);
 
-    if (::connect(sockfd, (sockaddr*)&addr, sizeof(addr)) < 0) {
-        std::cerr << "[!] Failed to connect to " << host << ":" << port << "\n";
-        return false;
-    }
-    return true;
+    // performs the SCTP association handshake with kernel connect()
+    bool success = (::connect(sockfd, (sockaddr*)&addr, sizeof(addr)) == 0);
+    if (!success)
+        std::cerr << "[!] failed to connect to " << host << ":" << port << "\n";
+
+    freeaddrinfo(res);  // frees memory allocated by getaddrinfo()
+    return success;
 } // connect()
 
-// **************************************************************************
-// data transfer
-// **************************************************************************
-/**
- * @brief send a message over SCTP; Uses sctp_sendmsg() to transmit a message
- * on the established SCTP socket. Flags and stream identifiers are set to
- * zero for simplicity.
- *
- * @param message data to send
- * @return true if the message was sent successfully, false otherwise
- */
 bool SCTPSocket::send(const std::string &message) {
-    int flags = 0;
-    int ret = sctp_sendmsg(sockfd, message.c_str(), message.size(),
-                           nullptr, 0, 0, 0, 0, 0, flags);
-    if (ret < 0) {
-        std::cerr << "[!] Failed to send SCTP message\n";
-        return false;
+    // even though SCTP is message-oriented, it’s still possible for a single
+    // send call to transmit only part of the data. This loop ensures that the
+    // entire message is eventually sent.
+    ssize_t totalSent = 0;
+    const char *data = message.c_str();
+    size_t len = message.size();
+    while (totalSent < static_cast<ssize_t>(len)) {
+
+        // actual sctp send call
+        int ret = sctp_sendmsg(sockfd, data + totalSent, len - totalSent,
+                               nullptr, 0, 0, 0, 0, 0, 0);
+        if (ret <= 0) {
+            std::perror("sctp_sendmsg");
+            return false;
+        }
+        totalSent += ret;
     }
     return true;
 } // send()
 
-/**
- * @brief Receive a message over SCTP; uses sctp_recvmsg() to receive data
- * from the SCTP socket. This function blocks until data is available. The
- * received bytes are stored in the provided string.
- *
- * @param message 0utput string to hold the received data
- * @return true if message received successfully, false otherwise
- */
 bool SCTPSocket::receive(std::string &message) {
+    // prevents leftover data from showing up in short reads
     char buffer[1024];
     std::memset(buffer, 0, sizeof(buffer));
-    int flags = 0;
+
+    int flags = 0;  // receive message status info
+
+    // will store the address of the sender
     struct sockaddr_in peerAddr;
     socklen_t len = sizeof(peerAddr);
 
+    // receive data from the socket
     int ret = sctp_recvmsg(sockfd, buffer, sizeof(buffer), 
                            (sockaddr*)&peerAddr, &len, nullptr, &flags);
     if (ret < 0) {
-        std::cerr << "[!] Failed to receive SCTP message\n";
+        std::cerr << "[!] failed to receive SCTP message\n";
         return false;
     }
-
+    if (ret == 0) {
+        std::cerr << "[!] connection closed by peer\n";
+        return false;
+    }
     message = std::string(buffer, ret);
     return true;
 } // receive()
 
 sockaddr_in SCTPSocket::get_peer_addr() const {
     return addr;
-}
+} // get_peer_addr()
 
-// **************************************************************************
-// cleanup
-// **************************************************************************
-/**
- * @brief close the SCTP socket if open; closes the underlying file descriptor
- * and resets it to -1.
- */
 void SCTPSocket::close() {
+    // closees the SCTP socket if open; closes the underlying file descriptor
+    // and resets it to -1.
     if (sockfd >= 0) {
         ::close(sockfd);
         sockfd = -1;
